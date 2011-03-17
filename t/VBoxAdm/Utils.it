@@ -15,11 +15,19 @@ is( VBoxAdm::Utils::trim2("  key = value # comment   \r\n"), "key = value", '"  
 
 # Test extract_recipients
 {
-    my $recipients = 'user1@domain.tld, <user2@domain.tld>, Mr. USer <User3@domain.tld>, <root@localhost>';
-    my @expect     = qw(user1@domain.tld user2@domain.tld User3@domain.tld root@localhost);
-    my @emails     = VBoxAdm::Utils::extract_recipients($recipients);
-    foreach my $i ( 1 .. $#expect ) {
-        is( lc( $emails[$i] ), lc( $expect[$i] ), $expect[$i] . ' equals' );
+    my %data = (
+        'user1@domain.tld, <user2@domain.tld>, Mr. USer <User3@domain.tld>, <root@localhost>' =>
+          [qw(user1@domain.tld user2@domain.tld User3@domain.tld root@localhost)],
+        'user1@domain.tld user2@domain.tld' => [qw(user1@domain.tld user2@domain.tld)],
+        'user1@domain.tld;user2@domain.tld' => [qw(user1@domain.tld user2@domain.tld)],
+    );
+    foreach my $string ( keys %data ) {
+        my @expect = @{ $data{$string} };
+        my @emails = &VBoxAdm::Utils::extract_recipients($string);
+        foreach my $i ( 1 .. $#expect ) {
+            is( lc( $emails[$i] ), lc( $expect[$i] ), $expect[$i] . ' equals' );
+        }
+        is( scalar(@emails), scalar(@expect), 'Number of recipients is equal' );
     }
 }
 
@@ -28,3 +36,32 @@ is( VBoxAdm::Utils::trim2("  key = value # comment   \r\n"), "key = value", '"  
 # Test is_valid_addresses_rfc822
 # Test is_valid_localpart_rfc822
 # Test is_valid_domain_rfc822
+{
+    my %data = (
+        'dgx.de'           => 1,
+        '__04aX  asdf.com' => 0,
+    );
+    foreach my $input ( keys %data ) {
+        my $valid = $data{$input};
+        if ($valid) {
+            ok( &VBoxAdm::Utils::is_valid_domain_rfc822($input), $input . ' is a valid domain.' );
+        }
+        else {
+            ok( !&VBoxAdm::Utils::is_valid_domain_rfc822($input), $input . ' is not a valid domain.' );
+        }
+    }
+}
+
+# Test unroll_recipient
+{
+    my %data = (
+        'admin#domain.tld@vacation.domain.tld'      => 'admin@domain.tld',
+        'admin#test#domain.tld@vacation.domain.tld' => 'admin#test@domain.tld',
+        'admin+test#domain.tld@vacation.domain.tld' => 'admin+test@domain.tld',
+    );
+    foreach my $rolled ( keys %data ) {
+        my $unrolled = &VBoxAdm::Utils::unroll_recipient($rolled);
+        my $expected = $data{$rolled};
+        is( $unrolled, $expected, $expected . ' equals ' . $unrolled );
+    }
+}

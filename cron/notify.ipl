@@ -78,6 +78,14 @@ exit 0;
 ############################
 # Subs
 ############################
+############################################
+# Usage      : &parse_reject_line($line);
+# Purpose    : Parses a postfix reject line and acts upon, called by parse_postfix_maillog
+# Returns    : False if the notify was skipped.
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub parse_reject_line {
     my $line = shift;
 
@@ -87,7 +95,7 @@ sub parse_reject_line {
         my ( $rdns, $ip, $smtpcode, $smtpmsg, $from, $to, $proto, $helo ) = ( $1, $2, $3, $4, $5, $6, $7, $8 );
         if ( $from eq $to ) {
             print "SKIPPED: SPAM - from=to\n" if $config{'notify'}{'verbose'};
-            return 1;
+            return;
         }
         elsif ( $smtpmsg =~ m/Greylisted/ ) {
             print "SKIPPED: GREYLISTED\n" if $config{'notify'}{'verbose'};
@@ -95,7 +103,7 @@ sub parse_reject_line {
         }
         elsif ( $from =~ m/@(yahoo|gmail|microsoft|hotmail|msn|live|aim|rolex|blizzard|gmx|web)\./ ) {
             print "SKIPPED: SPAM from well-known domain\n" if $config{'notify'}{'verbose'};
-            return 1;
+            return;
         }
 
         my $vars = {};
@@ -120,22 +128,22 @@ sub parse_reject_line {
             # Seems like the sender is missing the domain
             # part. Weird but not impossible.
             # - sp
-            return 1;
+            return;
         }
 
         if ( &is_notified( $dbh, 'postmaster@' . $from_domain ) ) {
             print "SKIPPED: This postmaster (postmaster\@$from_domain) was already notified.\n" if $config{'notify'}{'verbose'};
-            return 1;
+            return;
         }
 
         if ( &VBoxAdm::Utils::is_local_domain( $dbh, $from_domain ) ) {
             print "SKIPPED: Forged localdomain in sender ($from_domain may not be a local domain)!\n" if $config{'notify'}{'verbose'};
-            return 1;
+            return;
         }
 
         if ( !&VBoxAdm::Utils::is_local_mailbox( $dbh, $to ) ) {
             print "SKIPPED: Invalid recipient ($to is no local mailbox)!\n" if $config{'notify'}{'verbose'};
-            return 1;
+            return;
         }
 
         # Log-Message: Client host rejected: cannot find your hostname
@@ -214,7 +222,14 @@ sub parse_reject_line {
     }
     return 1;
 }
-
+############################################
+# Usage      : &parse_postfix_mailllog('/var/log/mail.log',$config);
+# Purpose    : Parse the given postfix mail.log for rejections
+# Returns    : True if the logfile could be opened.
+# Parameters : The Logfile location and the config hashref.
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub parse_postfix_maillog {
     my $file   = shift;
     my $config = shift;
@@ -226,21 +241,41 @@ sub parse_postfix_maillog {
             }
         }
         close($FH);
+        return 1;
     }
+    return;
 }
-
+############################################
+# Usage      : &set_notified($dbh, $email);
+# Purpose    : Mark this email as notified.
+# Returns    : Nothing
+# Parameters : DBH and an email.
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 # Mark this recipient as already notified
 sub set_notified {
     my $dbh   = shift;
     my $email = shift;
 
     my $query = "INSERT IGNORE INTO rfc_notify (email,ts) VALUES(?,NOW())";
-    my $sth = &VBoxAdm::DB::prepexec( $dbh, $query, $email );
-    $sth->finish();
-
-    return 1;
+    if ( my $sth = &VBoxAdm::DB::prepexec( $dbh, $query, $email ) ) {
+        $sth->finish();
+        return 1;
+    }
+    else {
+        return;
+    }
 }
 
+############################################
+# Usage      : if(&is_notified($dbh,$email)) { ... }
+# Purpose    : Determine if this email was already notified.
+# Returns    : True if it was notified. False otherwise.
+# Parameters : DBH and an email.
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 # Find out whether this recipient was already notified
 sub is_notified {
     my $dbh   = shift;

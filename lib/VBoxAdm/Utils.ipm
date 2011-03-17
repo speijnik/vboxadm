@@ -6,10 +6,10 @@ use warnings;
 our $VERSION = '@VERSION@';
 
 ############################################
-# Usage      : ????
-# Purpose    : ????
-# Returns    : ????
-# Parameters : ????
+# Usage      : my @recipients = &extract_recipients($recipients_string);
+# Purpose    : Turn a comma separted list of recipients into an array
+# Returns    : The list of recipients
+# Parameters : A string containing valid email adresses separted by commas
 # Throws     : no exceptions
 # Comments   : none
 # See Also   : n/a
@@ -18,6 +18,8 @@ sub extract_recipients {
 
     my @emails = ();
 
+    $recipients =~ s/\s+/ /g;
+    $recipients =~ s/[\s;|]/,/g;
     my @recps = split( /\s*,\s*/, $recipients );
     foreach my $recp (@recps) {
         if ( $recp =~ m/<([^>@]+@[^>]+)>/ ) {
@@ -47,9 +49,10 @@ sub extract_recipients {
 # See Also   : n/a
 sub unroll_recipient {
     my $rolled = shift;
+    $rolled or return;
 
     # recipient must be "unrolled", it's smth. like "user#domain.tld@vacation.domain.tld" -> "user@domain.tld"
-    if ( $rolled =~ m/^([^#]+)#([^@]+)\@(?:vacation|autoreply|mailarchive)\./ ) {
+    if ( $rolled =~ m/^([^@]+)#([^@#]+)\@/ ) {
         my $local_part = $1;
         my $domain     = $2;
         return $local_part . '@' . $domain;
@@ -184,17 +187,32 @@ sub trim2 {
     my $local_part = qr"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*"i;
     my $domain     = qr"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[A-Z]{2}|com|org|net|gov|mil|biz|info|mobi|name|aero|jobs|museum)"i;
 
+    ############################################
+    # Usage      : if(&is_valid_address_rfc822($email)) { ... }
+    # Purpose    : Test if the given string is a valid RFC822 email address
+    # Returns    : True on success.
+    # Parameters : A string
+    # Throws     : no exceptions
+    # Comments   : none
+    # See Also   : n/a
     sub is_valid_address_rfc822 {
         my $addy = shift;
         return $addy =~ m/^$local_part\@$domain$/;
     }
-
+    ############################################
+    # Usage      : if(&is_valid_addresses_rfc822($emails)) { ... }
+    # Purpose    : Test if the given string contains only valid RFC822 email addresses
+    # Returns    : True on success
+    # Parameters : A string
+    # Throws     : no exceptions
+    # Comments   : none
+    # See Also   : n/a
     sub is_valid_addresses_rfc822 {
         my $addys    = shift;
-        my @addrs    = split( /\s*,\s*/, $addys );
+        my @addrs    = &extract_recipients($addys);
         my $count_ok = 0;
         foreach my $addr (@addrs) {
-            if ( is_valid_address_rfc822($addr) ) {
+            if ( &is_valid_address_rfc822($addr) ) {
                 $count_ok++;
             }
             else {
@@ -205,19 +223,41 @@ sub trim2 {
         }
         return $count_ok;
     }
-
+    ############################################
+    # Usage      : if(&is_valid_localpart_rfc822($email)) { ... }
+    # Purpose    : Test if the given string contains a valid RFC822 local part
+    # Returns    : True on success
+    # Parameters : A string
+    # Throws     : no exceptions
+    # Comments   : none
+    # See Also   : n/a
     sub is_valid_localpart_rfc822 {
         my $addy = shift;
         print "\tis_valid_localpart_rfc822: $addy\n";
         return $addy =~ m/^$local_part$/;
     }
-
+    ############################################
+    # Usage      : ????
+    # Purpose    : ????
+    # Returns    : ????
+    # Parameters : ????
+    # Throws     : no exceptions
+    # Comments   : none
+    # See Also   : n/a
     sub is_valid_domain_rfc822 {
         my $addy = shift;
         return $addy =~ m/^$domain$/;
     }
 }
 
+############################################
+# Usage      : ????
+# Purpose    : ????
+# Returns    : ????
+# Parameters : ????
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 # http://www.torsten-horn.de/techdocs/ascii.htm
 sub is_utf8 {
     my $str = shift;
@@ -247,12 +287,28 @@ sub is_utf8 {
     }
 }
 
+############################################
+# Usage      : ????
+# Purpose    : ????
+# Returns    : ????
+# Parameters : ????
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub string_to_hex {
     my $str = shift;
     $str =~ s/(.)/sprintf("%02lX", ord $1)/seg;
     return $str;
 }
 
+############################################
+# Usage      : ????
+# Purpose    : ????
+# Returns    : ????
+# Parameters : ????
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub is_local_domain {
     my $dbh    = shift;
     my $domain = shift;
@@ -268,6 +324,14 @@ sub is_local_domain {
     return $count;
 }
 
+############################################
+# Usage      : ????
+# Purpose    : ????
+# Returns    : ????
+# Parameters : ????
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub is_local_mailbox {
     my $dbh     = shift;
     my $mailbox = shift;

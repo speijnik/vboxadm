@@ -1,13 +1,208 @@
 #!/usr/bin/perl
+package VBoxAdm::Mailarchive;
+
 use strict;
 use warnings;
 
-=begin whatis
+# We use "Defined-or operators" operators introduced with 5.9.0
+use 5.9.0;
+
+use Getopt::Long;
+use Config::Std;
+use Net::Domain;
+
+use VBoxAdm::Mailarchive '@VERSION@';
+
+my $syntax = "syntax: $0 [--verbose] [--config=<FILE>]\n";
+
+my ( $conffile_used, @hooks, %hook, %config, );
+
+# Valid config file locations to try
+my @conffile_locations = qw(
+  vboxadm.conf
+  conf/vboxadm.conf
+  /etc/vboxadm/vboxadm.conf
+);
+GetOptions(
+    'verbose|v+' => \$config{'verbose'},
+    'dry|d!'     => \$config{'dry'},
+    'no-fork!'   => \$config{'no-fork'},
+
+    # shift removes name of the option (config) and leaves the value for unshift
+    # unshift prepends to the list of valid config files so it is tried first
+    'config=s' => sub { shift; unshift( @conffile_locations, @_ ); },
+) or die $syntax;
+
+# Try all config file locations
+foreach my $loc (@conffile_locations) {
+    if ( -r $loc ) {
+        $conffile_used = $loc;
+        read_config $loc => %config;
+        last;
+    }
+}
+
+# Determine options
+my $dbhost = $config{'mailarchive'}{'dbhost'} || $config{'default'}{'dbhost'} || 'localhost';
+my $dbuser = $config{'mailarchive'}{'dbuser'} || $config{'default'}{'dbuser'} || 'vboxadm';
+my $dbpass = $config{'mailarchive'}{'dbpass'} || $config{'default'}{'dbpass'} || 'vboxadm';
+my $dbport = $config{'mailarchive'}{'dbport'} || $config{'default'}{'dbport'} || 3306;
+my $dbdb   = $config{'mailarchive'}{'dbdb'}   || $config{'default'}{'dbdb'}   || 'vboxadm';
+my $listen = $config{'mailarchive'}{'listen'} || 'localhost:10029';
+my $pidfile           = $config{'mailarchive'}{'pidfile'}           || '/var/run/vboxadm-ma.pid';
+my $user              = $config{'mailarchive'}{'user'}              || 'vboxadm';
+my $group             = $config{'mailarchive'}{'group'}             || 'vboxadm';
+my $childtimeout      = $config{'mailarchive'}{'childtimeout'}      || 60;
+my $min_servers       = $config{'mailarchive'}{'min_servers'}       || 5;
+my $min_spare_servers = $config{'mailarchive'}{'min_spare_servers'} || 5;
+my $max_servers       = $config{'mailarchive'}{'max_servers'}       || 80;
+my $max_spare_servers = $config{'mailarchive'}{'max_spare_servers'} || 10;
+my $max_requests      = $config{'mailarchive'}{'max_requests'}      || 500;
+my $nsloglevel = $config{'mailarchive'}{'nsloglevel'} // 2;
+my $logsock = $config{'mailarchive'}{'logsock'} || 'unix';
+my $background = $config{'no-fork'} ? 0 : 1;
+my $logfile                          = $config{'mailarchive'}{'logfile'}                          || '/var/log/vboxadm-ma.log';
+my $tempdir                          = $config{'mailarchive'}{'tempdir'}                          || '/tmp';
+my $ignore_spam                      = $config{'mailarchive'}{'ignore_spam'}                      || 1;
+my $ignore_sender_roleacc            = $config{'mailarchive'}{'ignore_sender_roleacc'}            || 1;
+my $ignore_sender_eq_recipient       = $config{'mailarchive'}{'ignore_sender_eq_recipient'}       || 1;
+my $ignore_senderdom_eq_recipientdom = $config{'mailarchive'}{'ignore_senderdom_eq_recipientdom'} || 1;
+
+# Database Hosts
+my @dbhosts = ();
+if ( $config{'mailarchive'}{'dbhost'} ) {
+    if ( ref( $config{'mailarchive'}{'dbhost'} ) eq 'ARRAY' ) {
+        push( @dbhosts, @{ $config{'mailarchive'}{'dbhost'} } );
+    }
+    else {
+        push( @dbhosts, $config{'mailarchive'}{'dbhost'} );
+    }
+}
+elsif ( $config{'default'}{'dbhost'} ) {
+    if ( ref( $config{'default'}{'dbhost'} ) eq 'ARRAY' ) {
+        push( @dbhosts, @{ $config{'default'}{'dbhost'} } );
+    }
+    else {
+        push( @dbhosts, $config{'default'}{'dbhost'} );
+    }
+}
+else {
+    push( @dbhosts, 'localhost' );
+}
+my @allow = ();
+if ( $config{'mailarchive'}{'allow'} ) {
+    if ( ref( $config{'mailarchive'}{'allow'} ) eq 'ARRAY' ) {
+        push( @dbhosts, @{ $config{'mailarchive'}{'allow'} } );
+    }
+    else {
+        push( @dbhosts, $config{'mailarchive'}{'allow'} );
+    }
+}
+else {
+    push( @allow, '127.0.0.1' );
+}
+
+# Parse listen and connect options
+my ( $srcaddr, $srcport ) = split /:/, $listen;
+
+# specify hosts and ports
+my $server = bless {
+    server => {
+
+        # Binding
+        host  => $srcaddr,
+        port  => $srcport,
+        proto => 'tcp',
+
+        # ACL
+        allow => \@allow,
+
+        # Logging
+        log_file        => 'Sys::Syslog',
+        log_level       => $nsloglevel,
+        syslog_logsock  => $logsock,
+        syslog_ident    => 'vboxadm-ma',
+        syslog_facility => 'mail',
+
+        # Misc
+        background => $background,
+        pid_file   => $pidfile,
+        user       => $user,
+        group      => $group,
+
+        # PreFork
+        min_servers       => $min_servers,
+        min_spare_servers => $min_spare_servers,
+        max_servers       => $max_servers,
+        max_spare_servers => $max_spare_servers,
+        max_requests      => $max_requests,
+    },
+    vbox => {
+        dbh          => undef,
+        childtimeout => $childtimeout,
+        dry          => $config{'dry'},
+        tempdir      => $tempdir,
+        hostname     => Net::Domain::hostfqdn() || 'localhost',
+
+        dbhosts => \@dbhosts,
+        dbport  => $dbport,
+        dbuser  => $dbuser,
+        dbpass  => $dbpass,
+        dbdb    => $dbdb,
+
+        ignore_spam                      => $ignore_spam,
+        ignore_sender_roleacc            => $ignore_sender_roleacc,
+        ignore_sender_eq_recipient       => $ignore_sender_eq_recipient,
+        ignore_senderdom_eq_recipientdom => $ignore_senderdom_eq_recipientdom,
+    },
+  },
+  'VBoxAdm::Mailarchive';
+
+# Test DB connection before starting server
+if ( $server->db_connect() ) {
+    $server->{vbox}->{dbh}->disconnect();
+}
+else {
+    die("Could not connect to database!");
+}
+
+# redirect STDOUT and STDERR to logfile
+# every output should go to the syslog but in case
+# something behaves badly, e.g. a module used,
+# we redirect the remaining output to a logfile
+# for further investigation.
+close(STDOUT);
+close(STDERR);
+close(STDIN);
+open STDIN,  '<', '/dev/null';
+open STDOUT, '>', $logfile;
+open STDERR, '>&STDOUT';
+
+$server->run();
+
+exit 1;
+
+###########################################################################
+# Subs
+###########################################################################
+# None yet.
+
+__END__
+
+=head1 NAME
+
+mailarchive - Archival and meta-data indexing of incoming and outgoing mail.
+
+=head1 VERSION
+
+This documentation refers to VBoxAdm mailarchive version @VERSION@
+built on @BUILDDATE@.
+
+=head1 DESCRIPTION
+
 What is the purpose of the mailarchive?
 - revision safe archival of all incoming and outgoing mails
 - search and retrieval of archived mails
-- probably this should later implemented as an local LMTP/SMTP server
-which would eliminate the need to spawn a new perl process for every mail
 - after mail is retrieved it is automatically signed
 - these signatures are re-signed/re-newed every n days/weeks/months
 - it aims to be compliant with the (german) law requiring business entities to
@@ -24,180 +219,6 @@ store exact copy of business mail
 -- postfix will bounce the mail if the transport ever fails (maybe due to a bug or misconfiguration) but
    will try at least for 5 days to deliver to an smtp server
 -- archival should be on another, secured, host
-- put mailarchive in its own package: vboxadm-ma
-=cut
-
-# TODO turn into Smtp-Server, see smtpproxy.pl
-
-use DBI;
-use Digest::SHA;
-use Getopt::Long;
-use Config::Std;
-
-use Sys::Syslog;
-
-use VBoxAdm::DB '@VERSION@';
-use VBoxAdm::Utils '@VERSION@';
-use VBoxAdm::Mailarchive '@VERSION@';
-
-my $db_host = 'localhost';
-my $db_user = 'vacation';
-my $db_pass = '';
-my $db_port = 3306;
-my $db_db   = 'vboxadm';
-
-my ( $conffile_used, @hooks, %hook, %config, );
-
-# Valid config file locations to try
-my @conffile_locations = qw(
-  vboxadm.conf
-  conf/vboxadm.conf
-  /etc/vboxadm.conf
-  /etc/vboxadm/vboxadm.conf
-);
-
-GetOptions(
-    'sender|s=s'    => \$config{'sender'},
-    'recipient|r=s' => \$config{'recipient'},
-    'verbose|v+'    => \$config{'verbose'},
-
-    # shift removes name of the option (config) and leaves the value for unshift
-    # unshift prepends to the list of valid config files so it is tried first
-    'config=s' => sub { shift; unshift( @conffile_locations, @_ ); },
-) or &usage();
-
-# Try all config file locations
-foreach my $loc (@conffile_locations) {
-    if ( -r $loc ) {
-        $conffile_used = $loc;
-        read_config $loc => %config;
-        last;
-    }
-}
-
-$db_host = $config{'mailarchive'}{'dbhost'} || $config{'default'}{'dbhost'} || $db_host;
-$db_user = $config{'mailarchive'}{'dbuser'} || $config{'default'}{'dbuser'} || $db_user;
-$db_pass = $config{'mailarchive'}{'dbpass'} || $config{'default'}{'dbpass'} || $db_pass;
-$db_port = $config{'mailarchive'}{'dbport'} || $config{'default'}{'dbport'} || $db_port;
-$db_db   = $config{'mailarchive'}{'dbdb'}   || $config{'default'}{'dbdb'}   || $db_db;
-
-my ( $sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst ) = localtime(time);
-$mon++;
-$year += 1900;
-if ( !$config{'mailarchive'}{'rotate'} || $config{'mailarchive'}{'rotate'} ne 'monthly' ) {
-    $mon = 1;
-}
-my $db_archive_table = 'archive_' . sprintf( "%04d_%02d", $year, $mon );
-my $db_metadata_table = 'archive_metadata';
-
-# Check options
-die("No sender given on command line!")    if !$config{'sender'};
-die("No recipient given on command line!") if !$config{'recipient'};
-
-binmode( STDIN, ':utf8' );
-
-openlog( 'vboxadm-mailarchive', 'ndelay,nofatal', 'mail' );
-
-# recipient must be "unrolled", it's smth. like "user#domain.tld@vacation.domain.tld" -> "user@domain.tld"
-if ( $config{'recipient'} ) {
-    my $unrolled = &VBoxAdm::Utils::unroll_recipient( $config{'recipient'} );
-    if ($unrolled) {
-        $config{'orig-recipient'} = $config{'recipient'};
-        $config{'recipient'}      = $unrolled;
-    }
-}
-
-###
-# Parse incoming mail
-###
-my %header = ();
-my %status = ();
-
-my $digest    = Digest::SHA->new(256);
-my $in_header = 1;
-
-my $body = '';
-
-# add X-Envelope-From and X-Envelope-To to preserve original sender/recipient
-my $xenvfrom = 'X-Envelope-From: ' . lc( $config{'sender'} ) . "\r\n";
-$digest->add($xenvfrom);
-$body .= $xenvfrom;
-my $xenvto = 'X-Envelope-To: ' . lc( $config{'recipient'} ) . "\r\n";
-$digest->add($xenvto);
-$body .= $xenvto;
-while ( my $line = <> ) {
-    $digest->add($line);
-    $body .= $line;
-    $line =~ /^$/ and $in_header = 0;
-    if ($in_header) {
-        $line =~ /^From:\s+(.*)$/i                  and $header{'from'}              = $1;
-        $line =~ /^To:\s+(.*)$/i                    and $header{'to'}                = $1;
-        $line =~ /^CC:\s+(.*)$/i                    and $header{'cc'}                = $1;
-        $line =~ /^Bcc:\s+(.*)$/i                   and $header{'bcc'}               = $1;
-        $line =~ /^Resent-To:\s+(.*)$/i             and $header{'resent-to'}         = $1;
-        $line =~ /^Resent-CC:\s+(.*)$/i             and $header{'resent-cc'}         = $1;
-        $line =~ /^Resent-Bcc:\s+(.*)$/i            and $header{'resent-bcc'}        = $1;
-        $line =~ /^Reply-to:\s+(.*)$/i              and $header{'reply-to'}          = $1;
-        $line =~ /^Subject:\s+(.*)$/i               and $header{'subject'}           = $1;
-        $line =~ /^Return-Path:\s+<?([^>]+)>?$/i    and $header{'return-path'}       = $1;
-        $line =~ /^Auto-Submitted:\s+(.*)$/i        and $header{'auto-submitted'}    = lc($1);
-        $line =~ /^X-Loop:\s+VBoxAdm-Vacation\s+$/i and $status{'is-loop'}           = 1;
-        $line =~ /^List-.*:/i                       and $status{'is-list'}           = 1;
-        $line =~ /^Message-Id:\s+<([^>]+)>/i        and $header{'msg-id'}            = $1;
-        $line =~ /^X-Spam-(Flag|Status):\s+YES/i    and $header{'x-spam-status'}     = 1 and $status{'is-spam'} = 1;
-        $line =~ /^X-Facebook-Notify:/i             and $header{'x-facebook-notify'} = 1;
-        $line =~ /^Precedence:\s+(bulk|list|junk)/i and $header{'precedence'}        = $1;
-        $line =~ /^(X-(Barracuda-)?Spam-Status):\s+(Yes)/i                        and $header{$1} = $3 and $status{'is-spam'} = 1;
-        $line =~ /^(X-Dspam-Result):\s+(spam|bl[ao]cklisted)/i                    and $header{$1} = $3 and $status{'is-spam'} = 1;
-        $line =~ /^(X-(Anti|Avas-)?virus-status):\s+(infected)/i                  and $header{$1} = $3 and $status{'is-spam'} = 1;
-        $line =~ /^(X-(Avas-spam|Spamtest|CRM114|Razor|Pyzor)-status):\s+(Spam)/i and $header{$1} = $3 and $status{'is-spam'} = 1;
-        $line =~ /^(X-OSBF-LUA-Score):\s+[0-9\/\.\-\+]+\s+\[([-S])\]/i            and $header{$1} = $3 and $status{'is-spam'} = 1;
-    }
-}
-my $checksum = $digest->hexdigest();
-
-my $dsn = "DBI:mysql:host=$db_host;database=$db_db;port=$db_port;user=$db_user;password=$db_pass";
-my $dbh = &VBoxAdm::DB::connect($dsn);
-
-if ( !$dbh ) {
-    syslog( 2, 'Could not connect to database with DSN %s - From: %s - To: %s - Exiting', $dsn, $config{'sender'}, $config{'recipient'} );
-    closelog();
-    die("Could not connect to database with DSN $dsn");
-}
-
-# TODO apply exclude/include filters
-
-my $query = "INSERT DELAYED INTO " . $db_archive_table . " (checksum,body) VALUES(?,?)";
-my $sth = &VBoxAdm::DB::prepexec( $dbh, $query, $checksum, $body )
-  or syslog( 2, "Failed to log message from " . $config{'sender'} . " to " . $config{'recipient'} . " to DB." );
-$sth->finish;
-
-# TODO write metadata and log
-
-closelog();
-
-$dbh->disconnect();
-exit 0;
-
-###########################################################################
-# Subs
-###########################################################################
-# None yet.
-
-__END__
-
-=head1 NAME
-
-mailarchive - Archival and meta-data indexing of incoming mail.
-
-=head1 VERSION
-
-This documentation refers to VBoxAdm mailarchive version @VERSION@
-built on @BUILDDATE@.
-
-=head1 DESCRIPTION
-
-TODO
 
 =head1 CONFIGURATION AND ENVIRONMENT
 
@@ -221,7 +242,7 @@ TODO
 
 =head1 DEPENDENCIES
 
-VBoxAdm::Utils, DBI.
+Config::Std, Net::Domain, VBoxAdm::Mailarchive, DBI.
 
 =head1 INCOMPATIBILITIES
 

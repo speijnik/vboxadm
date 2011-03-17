@@ -105,7 +105,14 @@ exit 0;
 ###########################################################################
 # SUBS
 ###########################################################################
-
+############################################
+# Usage      : &reload_postgrey();
+# Purpose    : Make Postgrey reload its whitelist.
+# Returns    : True on success.
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 # We must HUP to tell postgrey to reload its whitelist
 sub reload_postgrey {
     my $pidfile = '/var/run/postgrey.pid';
@@ -123,7 +130,14 @@ sub reload_postgrey {
         }
     }
 }
-
+############################################
+# Usage      : &store_whitelist($whitelist,$dbh);
+# Purpose    :
+# Returns    :
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub store_whitelist {
     my $whitelist = shift;
     my $dbh       = shift;
@@ -139,7 +153,14 @@ sub store_whitelist {
 
     return 1;
 }
-
+############################################
+# Usage      : &write_exim_whiteliste($dbh,$config);
+# Purpose    :
+# Returns    :
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub write_exim_whitelist {
     my $dbh    = shift;
     my $config = shift;
@@ -156,7 +177,14 @@ sub write_exim_whitelist {
     }
     return;
 }
-
+############################################
+# Usage      : &write_postfix_whitelist($dbh,$config);
+# Purpose    :
+# Returns    :
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub write_postfix_whitelist {
     my $dbh    = shift;
     my $config = shift;
@@ -173,7 +201,14 @@ sub write_postfix_whitelist {
     }
     return;
 }
-
+############################################
+# Usage      : &parse_exim($dbh,$config);
+# Purpose    : Parse an exim mainlog for outgoing mail.
+# Returns    : Always true.
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub parse_exim {
     my $dbh    = shift;
     my $config = shift;
@@ -235,8 +270,17 @@ sub parse_exim {
         }
     }
     close($IN);
-}
 
+    return 1;
+}
+############################################
+# Usage      : if(&is_valid_domain($from,$config)) { ... }
+# Purpose    : Determine if the given email address contains a valid domain.
+# Returns    : True if the domain is valid.
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub is_valid_domain {
     my $from   = shift;
     my $config = shift;
@@ -255,7 +299,14 @@ sub is_valid_domain {
         return 1;
     }
 }
-
+############################################
+# Usage      : if(&is_local_domain($dbh, $from)) { ... }
+# Purpose    : Determine if the given email address has a local domain.
+# Returns    : True if the domain is local.
+# Parameters : DBH, an email address
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub is_local_domain {
     my $dbh  = shift;
     my $from = shift;
@@ -272,7 +323,14 @@ sub is_local_domain {
 
     return $count;
 }
-
+############################################
+# Usage      : if(&is_ignored_network($ip,$config)) { ... }
+# Purpose    : Determine if this IP is from an ignored network range.
+# Returns    : True if it is.
+# Parameters : IP, Config hashref
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub is_ignored_network {
     my $ip     = shift;
     my $config = shift;
@@ -282,7 +340,14 @@ sub is_ignored_network {
     }
     return;
 }
-
+############################################
+# Usage      : &parse_postfix($dbh, $config);
+# Purpose    : Pare as postfix logfile for outgoing messages.
+# Returns    : Always true.
+# Parameters : None
+# Throws     : no exceptions
+# Comments   : none
+# See Also   : n/a
 sub parse_postfix {
     my $dbh    = shift;
     my $config = shift;
@@ -295,12 +360,12 @@ sub parse_postfix {
     # and if that MID is sent add it to the whitelist table
 
     open( my $IN, "<", $config->{'awl'}{'logfile'} ) or die("Could not open file $config->{'awl'}{'logfile'}: $!");
-    while (<$IN>) {
-        chomp;
+    while ( my $line = <$IN> ) {
+        chomp($line);
 
         #print "parse_postfix - Candidate Line: $_\n";
-        if (m/postfix\/smtpd\[(\d+)\]: NOQUEUE: client=(\S+)\[([\d\.]+)\], sasl_method=([A-Z]+), sasl_username=(\S+)\b/) {
-            print "\tnew client connects: $_\n" if $config->{'awl'}{'verbose'};
+        if ( $line =~ m/postfix\/smtpd\[(\d+)\]: NOQUEUE: client=(\S+)\[([\d\.]+)\], sasl_method=([A-Z]+), sasl_username=(\S+)\b/ ) {
+            print "\tnew client connects: $line\n" if $config->{'awl'}{'verbose'};
 
             # new client connects
             my $pid           = $1;
@@ -318,8 +383,10 @@ sub parse_postfix {
 
             print "\t\trdns: $rdns - ip: $ip - sasl_method: $sasl_method - sasl_username: $sasl_username\n" if $config->{'awl'}{'verbose'};
         }
-        elsif (m/postfix\/smtpd\[(\d+)\]: proxy-accept: END-OF-MESSAGE: .*: queued as (\w{10,12}); from=<([^>]+)> to=<([^>]+)> proto=([A-Z]+) helo=<([^>]+)>/) {
-            print "\tproxy-accept: $_\n" if $config->{'awl'}{'verbose'};
+        elsif ( $line =~
+            m/postfix\/smtpd\[(\d+)\]: proxy-accept: END-OF-MESSAGE: .*: queued as (\w{10,12}); from=<([^>]+)> to=<([^>]+)> proto=([A-Z]+) helo=<([^>]+)>/ )
+        {
+            print "\tproxy-accept: $line\n" if $config->{'awl'}{'verbose'};
             my $pid   = $1;
             my $qid   = $2;
             my $from  = $3;
@@ -341,8 +408,8 @@ sub parse_postfix {
                 }
             }
         }
-        elsif (m/postfix\/qmgr\[(\d+)\]: (\w{10,12}): from=<([^>]+)>, /) {
-            print "\textract from: $_\n" if $config->{'awl'}{'verbose'};
+        elsif ( $line =~ m/postfix\/qmgr\[(\d+)\]: (\w{10,12}): from=<([^>]+)>, / ) {
+            print "\textract from: $line\n" if $config->{'awl'}{'verbose'};
 
             # extract from
             my $pid  = $1;
@@ -357,8 +424,8 @@ sub parse_postfix {
 
             print "\t\tfrom: $from\n" if $config->{'awl'}{'verbose'};
         }
-        elsif (m/postfix\/smtp\[(\d+)\]: (\w{10}): to=<([^>]+)>, .*, status=sent /) {
-            print "\textract to: $_\n" if $config->{'awl'}{'verbose'};
+        elsif ( $line =~ m/postfix\/smtp\[(\d+)\]: (\w{10}): to=<([^>]+)>, .*, status=sent / ) {
+            print "\textract to: $line\n" if $config->{'awl'}{'verbose'};
 
             # extract to
             my $pid = $1;
@@ -372,8 +439,8 @@ sub parse_postfix {
 
             print "\t\tto: $to\n" if $config->{'awl'}{'verbose'};
         }
-        elsif (m/postfix\/qmgr\[(\d+)\]: (\w{10,12}): removed/) {
-            print "\twhitelist iff: $_\n" if $config->{'awl'}{'verbose'};
+        elsif ( $line =~ m/postfix\/qmgr\[(\d+)\]: (\w{10,12}): removed/ ) {
+            print "\twhitelist iff: $line\n" if $config->{'awl'}{'verbose'};
 
             # whitelist if eglible
             my $pid = $1;
@@ -401,8 +468,8 @@ sub parse_postfix {
                 delete( $qids{$qid} );
             }
         }
-        elsif (m/postfix\/smtpd\[(\d+)\]: disconnect from (\S+)\[([\d\.]+)\]/) {
-            print "\tclient disconnects: $_\n" if $config->{'awl'}{'verbose'};
+        elsif ( $line =~ m/postfix\/smtpd\[(\d+)\]: disconnect from (\S+)\[([\d\.]+)\]/ ) {
+            print "\tclient disconnects: $line\n" if $config->{'awl'}{'verbose'};
 
             # disconnect
             my $pid  = $1;
@@ -425,6 +492,8 @@ sub parse_postfix {
         }
     }
     close($IN);
+
+    return 1;
 }
 __END__
 
